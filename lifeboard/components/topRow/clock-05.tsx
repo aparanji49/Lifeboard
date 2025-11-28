@@ -27,7 +27,7 @@ export default function WidgetClock() {
 
   return (
     <div className="flex flex-col items-center gap-2">
-    <Widget>
+    <Widget className="rounded-full bg-black text-white">
       <WidgetContent>
         {[...Array(12)].map((_, i) => {
           const hour = i + 1;
@@ -38,7 +38,7 @@ export default function WidgetClock() {
           return (
             <div
               key={hour}
-              className="absolute text-sm font-semibold text-gray-800 dark:text-gray-200"
+              className="absolute text-sm font-semibold text-white"
               style={{
                 transform: `translate(${x}px, ${y}px)`,
               }}
@@ -49,13 +49,13 @@ export default function WidgetClock() {
         })}
         <div className="relative size-[88px]">
           <div
-            className="absolute bottom-1/2 left-1/2 h-12 w-1 origin-bottom rounded-full bg-gray-800 dark:bg-gray-200"
+            className="absolute bottom-1/2 left-1/2 h-10 w-1 origin-bottom rounded-full bg-gray-600"
             style={{
               transform: `translateX(-50%) rotate(${hoursDegrees}deg)`,
             }}
           />
           <div
-            className="absolute bottom-1/2 left-1/2 h-12 w-1 origin-bottom rounded-full bg-gray-600 dark:bg-gray-400"
+            className="absolute bottom-1/2 left-1/2 h-14 w-1 origin-bottom rounded-full bg-gray-400"
             style={{
               transform: `translateX(-50%) rotate(${minutesDegrees}deg)`,
             }}

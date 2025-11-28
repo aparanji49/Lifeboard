@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/widget";
 import { Label } from "@/components/ui/label";
 import { useEffect, useState } from "react";
+import Image from "next/image";
 
 interface LocationData {
   city: string;
@@ -46,7 +47,7 @@ export default function WidgetWeather() {
 
         // STEP 2: Fetch weather using detected city
         return fetch(
-          `https://api.openweathermap.org/data/2.5/weather?q=${loc.city}&appid=${API_KEY}&units=metric`
+          `https://api.openweathermap.org/data/2.5/weather?q=${loc.city}&appid=${API_KEY}&units=imperial`
         );
       })
       .then((res) => res.json())
@@ -80,15 +81,15 @@ export default function WidgetWeather() {
     );
   }
   return (
-    <Widget>
+    <Widget className="rounded-3xl">
       <WidgetHeader className="flex-col gap-3">
         <WidgetTitle>{location.city}</WidgetTitle>
         <div className="flex flex-col">
           <div className="flex items-center gap-x-2">
-            <SunIcon className="size-8 fill-current" />
-            <Label className="text-4xl">{Math.round(weather.temp)}&deg;C</Label>
+            <Image  src={`https://openweathermap.org/img/wn/${weather.icon}.png`} height={100} width={100} alt={`${weather.description}`}/>
+            <Label className="text-4xl">{Math.round(weather.temp)}&deg;F</Label>
           </div>
-          <Label className="text-muted-foreground">Feels Like {Math.round(weather.feels_like)}&deg;C</Label>
+          <Label className="text-muted-foreground">Feels Like {Math.round(weather.feels_like)}&deg;F</Label>
         </div>
       </WidgetHeader>
       <WidgetContent className="items-end">
@@ -98,7 +99,7 @@ export default function WidgetWeather() {
             className="mr-1 size-4"
             strokeWidth={4}
           />
-          <Label>{Math.round(weather.temp_max)}&deg;C</Label>
+          <Label>{Math.round(weather.temp_max)}&deg;F</Label>
         </div>
         <div className="flex w-full items-center justify-end">
           <MoveDownIcon
@@ -106,7 +107,7 @@ export default function WidgetWeather() {
             className="mr-1 size-4"
             strokeWidth={4}
           />
-          <Label>{Math.round(weather.temp_min)}&deg;C</Label>
+          <Label>{Math.round(weather.temp_min)}&deg;F</Label>
         </div>
       </WidgetContent>
     </Widget>
