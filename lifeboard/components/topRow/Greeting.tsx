@@ -14,7 +14,12 @@ const day = new Date().toLocaleDateString("en-US", { weekday: "long" });
 
 const [quote, setQuote] = useState<Quote| null>(null);
 const API_KEY = process.env.NEXT_PUBLIC_API_NINJAS_KEY!;
+
 useEffect(() => {
+      // The delay is 24 hours in milliseconds
+    const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+
+    const intervalId = setInterval(() => {
     fetch("https://api.api-ninjas.com/v2/randomquotes?categories=inspirational,courage", {
         method: "GET",
         headers: {
@@ -30,6 +35,11 @@ useEffect(() => {
             // console.log(quote.text); // Log the entire response for inspection
         }
         );
+         }, TWENTY_FOUR_HOURS);
+         // Cleanup function to clear the interval when the component unmounts
+    return () => {
+      clearInterval(intervalId);
+    };
 }, []);
 
 

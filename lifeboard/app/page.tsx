@@ -1,3 +1,4 @@
+import BottomCards from "@/components/bottomRow/bottomCards";
 import Header from "@/components/header/Header";
 import WidgetClock from "@/components/topRow/clock-05";
 import Greeting from "@/components/topRow/Greeting";
@@ -12,6 +13,10 @@ export default function Home() {
         <WidgetClock />
         <Greeting />
         <WidgetWeather />
+      </section>
+      <section>
+        {/* bottom content goes here */}
+        <BottomCards />
       </section>
     </div>
   );
