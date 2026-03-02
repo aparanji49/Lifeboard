@@ -5,21 +5,18 @@ All-in-one full stack productivity web application for busy lives and creative m
 
 ## Features
 
-- **Dashboard**: Centralized view of tasks, goals, and calendar events
-- **Task Management**: Create, organize, and track tasks with priorities and deadlines
-- **Calendar Integration**: Unified calendar for scheduling and event planning
-- **Goal Tracking**: Set and monitor personal and professional objectives
-- **Notes & Ideas**: Capture and organize thoughts, ideas, and notes
-- **Analytics**: Visual insights into productivity and progress
-- **Offline data persistence**: Task data is stored in the browser for faster lookups and offline persistence
+- **Natural Language Task Ingestion**: A single text field that uses LLM-based intent parsing to understand complex scheduling requests without manual date-picking.
+- **Autonomous Conflict Resolution**: A LangGraph-powered agent that iteratively reasons through schedule overlaps by fetching Google Calendar events and proposing optimal gaps.
+- **Human-in-the-Loop (HITL) Validation**: A "Safety First" workflow where the agent presents proposed schedule changes for user approval before modifying the Google Calendar via OAuth.
+- **Hybrid Offline Persistence**: A robust data layer utilizing IndexedDB for immediate local capture and PostgreSQL (via Prisma) for cloud synchronization and agent processing.
+- **Real-time Task Tracking**: A dynamic UI that updates with checkboxes and "Processing" states, ensuring users always know the status of their AI agent's reasoning.
 
 ## Tech Stack
 
-- **Frontend**: Next.js, TypeScript, Tailwind CSS, Zod
-- **Backend**: Next.js, TypeScript, OpenAI API, Google Calendar API
-- **Database**: IndexedDB
-
-
+- **Frontend**: Next.js, TypeScript, Tailwind CSS, Shadcn UI, TanStack Query
+- **AI & Orchestration**: LangGraph (Stateful Agents), OpenAI API
+- **Backend & Auth**: Next.js API Routes, Google OAuth 2.0, Supabase
+- **Database & ORM**: PostgreSQL, Prisma ORM, IndexedDB
 
 ### Installation
 
