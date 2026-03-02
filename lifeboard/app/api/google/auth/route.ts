@@ -1,3 +1,4 @@
+// app/api/google/auth/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
 
@@ -14,7 +15,7 @@ export async function GET(req: NextRequest) {
 
   // Scopes: full calendar read/write for your account
   const scopes = [
-    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.events",
   ];
 
   const url = oauth2Client.generateAuthUrl({
