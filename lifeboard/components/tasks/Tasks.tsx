@@ -13,23 +13,14 @@ export default function Tasks() {
     addTask,
     toggleComplete,
     updateTaskText,
-    scheduleTask,
     retryScheduleTask,
     removeTask,
+    handleConflictEdit,
   } = useTasks();
 
   const total = tasks.length;
   const openCount = tasks.filter((t) => t.status !== "completed").length;
   const scheduledCount = tasks.filter((t) => t.status === "scheduled").length;
-
-  // when user edits after conflict, update rawText/title then re-schedule
-  const handleConflictEdit = async (id: string, newRawText: string) => {
-    // simple version: update both rawText & title, then call scheduleTask
-    // you can move this into useTasks later if you want.
-    await updateTaskText(id, newRawText); // this currently only updates title
-    // if you want rawText too, adjust updateTaskText implementation
-    await scheduleTask(id);
-  };
 
   return (
     <div className="flex flex-col lifeboard-card">
@@ -39,7 +30,7 @@ export default function Tasks() {
         scheduledCount={scheduledCount}
       />
 
-      <div className="flex-1 rounded-3xl bg-[#E8FCFD] px-6 py-4 shadow-inner">
+      <div className="flex-1 rounded-3xl px-6 py-4">
         {loading ? (
           <p className="text-xs text-slate-500">Loading tasks…</p>
         ) : (
