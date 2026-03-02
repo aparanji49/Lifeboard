@@ -1,172 +1,288 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { nanoid } from "nanoid"; 
 import type { Task, TaskStatus } from "@/types/tasks";
-import { getAllTasks, putTask, deleteTask } from "@/lib/indexedDbTasks";
+import {
+  getAllTasks,
+  putTask,
+  deleteTask as dbDeleteTask,
+} from "@/lib/db";
+import { syncWhenOnline, queuePendingOp } from "@/lib/sync";
 
 export function useTasks() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const loadTasks = useCallback(async () => {
+    const list = await getAllTasks();
+    setTasks(list);
+  }, []);
+
   useEffect(() => {
-    getAllTasks().then((stored) => {
-      setTasks(stored);
-      setLoading(false);
+    loadTasks().then(() => setLoading(false));
+  }, [loadTasks]);
+
+  useEffect(() => {
+    if (!navigator.onLine) return;
+    syncWhenOnline().then((merged) => {
+      setTasks(merged);
     });
   }, []);
 
-  // --- NEW: helper to update one task in state + IndexedDB ---
-  const saveUpdatedTask = async (updated: Task) => {
+  useEffect(() => {
+    const handleOnline = () => {
+      syncWhenOnline().then(setTasks);
+    };
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
+  }, []);
+
+  const saveUpdatedTask = useCallback(async (updated: Task) => {
     setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
     await putTask(updated);
-  };
+  }, []);
 
-  // ---- AUTO-SCHEDULING ON ADD ----
-  const addTask = async (text: string) => {
-    const now = new Date().toISOString();
-    const newTask: Task = {
-      id: nanoid(),
-      rawText: text,
-      title: text, // AI can refine later
-      status: "unscheduled",
-      createdAt: now,
-      updatedAt: now,
-    };
+  const addTask = useCallback(
+    async (text: string) => {
+      const now = new Date().toISOString();
+      const newTask: Task = {
+        id: nanoid(),
+        rawText: text,
+        title: text,
+        status: "unscheduled",
+        createdAt: now,
+        updatedAt: now,
+        syncStatus: "pending",
+      };
 
-    // add as unscheduled first
-    setTasks((prev) => [...prev, newTask]);
-    await putTask(newTask);
+      setTasks((prev) => [...prev, newTask]);
+      await putTask(newTask);
+      await scheduleTask(newTask.id, newTask);
 
-    // immediately trigger automatic scheduling for this new task
-    await scheduleTask(newTask.id, newTask);
-  };
+      if (!navigator.onLine) {
+        queuePendingOp("create", newTask.id, undefined, newTask);
+        return;
+      }
 
-  // ---- TASK UPDATES ----
-  // update status helper
-  const updateTaskStatus = async (id: string, status: TaskStatus) => {
-    const task = tasks.find((t) => t.id === id);
-    if (!task) return;
+      try {
+        const res = await fetch("/api/tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(newTask),
+        });
+        if (res.ok) {
+          const created = await res.json();
+          const updated: Task = {
+            ...newTask,
+            serverId: created.serverId ?? created.id,
+            syncStatus: "synced",
+          };
+          await saveUpdatedTask(updated);
+        } else {
+          queuePendingOp("create", newTask.id, undefined, newTask);
+        }
+      } catch {
+        queuePendingOp("create", newTask.id, undefined, newTask);
+      }
+    },
+    [saveUpdatedTask]
+  );
 
-    const updated: Task = {
-      ...task,
-      status,
-      updatedAt: new Date().toISOString(),
-    };
+  const updateTaskStatus = useCallback(
+    async (id: string, status: TaskStatus) => {
+      const task = tasks.find((t) => t.id === id);
+      if (!task) return;
+      const updated: Task = {
+        ...task,
+        status,
+        updatedAt: new Date().toISOString(),
+      };
+      await saveUpdatedTask(updated);
 
-    await saveUpdatedTask(updated);
-  };
+      if (navigator.onLine && task.serverId) {
+        try {
+          const res = await fetch(`/api/tasks/${task.serverId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(updated),
+          });
+          if (res.ok) {
+            const fromServer = await res.json();
+            await saveUpdatedTask({ ...fromServer, id: task.id });
+          } else {
+            queuePendingOp("update", task.id, task.serverId, updated);
+          }
+        } catch {
+          queuePendingOp("update", task.id, task.serverId, updated);
+        }
+      } else if (!navigator.onLine) {
+        queuePendingOp("update", task.id, task.serverId, updated);
+      }
+    },
+    [tasks, saveUpdatedTask]
+  );
 
-  // toggle between completed & unscheduled
-  const toggleComplete = async (id: string) => {
-    const task = tasks.find((t) => t.id === id);
-    if (!task) return;
-    const status: TaskStatus =
-      task.status === "completed" ? "unscheduled" : "completed";
-    await updateTaskStatus(id, status);
-  };
+  const toggleComplete = useCallback(
+    async (id: string) => {
+      const task = tasks.find((t) => t.id === id);
+      if (!task) return;
+      const status: TaskStatus =
+        task.status === "completed" ? "unscheduled" : "completed";
+      await updateTaskStatus(id, status);
+    },
+    [tasks, updateTaskStatus]
+  );
 
-  // update title & rawText
-  const updateTaskText = async (id: string, text: string) => {
-    const task = tasks.find((t) => t.id === id);
-    if (!task) return;
+  const updateTaskText = useCallback(
+    async (id: string, text: string) => {
+      const task = tasks.find((t) => t.id === id);
+      if (!task) return;
+      const updated: Task = {
+        ...task,
+        title: text,
+        rawText: text,
+        updatedAt: new Date().toISOString(),
+      };
+      await saveUpdatedTask(updated);
 
-    const updated: Task = {
-      ...task,
-      title: text,
-      rawText: text, // so AI uses new text on re-schedule
-      updatedAt: new Date().toISOString(),
-    };
+      if (navigator.onLine && task.serverId) {
+        try {
+          const res = await fetch(`/api/tasks/${task.serverId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(updated),
+          });
+          if (!res.ok) {
+            queuePendingOp("update", task.id, task.serverId, updated);
+          }
+        } catch {
+          queuePendingOp("update", task.id, task.serverId, updated);
+        }
+      } else if (!navigator.onLine) {
+        queuePendingOp("update", task.id, task.serverId, updated);
+      }
+    },
+    [tasks, saveUpdatedTask]
+  );
 
-    await saveUpdatedTask(updated);
-  };
+  const removeTask = useCallback(
+    async (id: string) => {
+      const task = tasks.find((t) => t.id === id);
+      setTasks((prev) => prev.filter((t) => t.id !== id));
+      await dbDeleteTask(id);
 
-  // delete task
-  const removeTask = async (id: string) => {
-    setTasks((prev) => prev.filter((t) => t.id !== id));
-    await deleteTask(id);
-  };
+      if (task?.serverId && navigator.onLine) {
+        try {
+          const res = await fetch(`/api/tasks/${task.serverId}`, {
+            method: "DELETE",
+          });
+          if (!res.ok) {
+            queuePendingOp("delete", id, task.serverId, null);
+          }
+        } catch {
+          queuePendingOp("delete", id, task.serverId, null);
+        }
+      } else if (task?.serverId) {
+        queuePendingOp("delete", id, task.serverId, null);
+      }
+    },
+    [tasks]
+  );
 
-  // ---- Agentic AI scheduling ----
-  // NOTE: added optional `taskOverride` so addTask can pass the just-created task
-  const scheduleTask = async (id: string, taskOverride?: Task) => {
-    const existing = tasks.find((t) => t.id === id);
-    const task = taskOverride ?? existing;
-    if (!task) return;
+  const scheduleTask = useCallback(
+    async (id: string, taskOverride?: Task) => {
+      const existing = tasks.find((t) => t.id === id);
+      const task = taskOverride ?? existing;
+      if (!task) return;
 
-    try {
-      const res = await fetch("/api/tasks/schedule", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: task.rawText }),
-      });
+      try {
+        const res = await fetch("/api/tasks/schedule", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: task.rawText }),
+        });
+        const data = await res.json();
 
-      const data = await res.json();
-
-      if (data.status === "scheduled") {
-        const updated: Task = {
-          ...task,
-          title: data.title,
-          description: data.description,
-          status: "scheduled",
-          scheduledStart: data.start,
-          scheduledEnd: data.end,
-          calendarEventId: data.calendarEventId,
-          conflictMessage: undefined,
-          errorMessage: undefined,
-          updatedAt: new Date().toISOString(),
-        };
-
-        await saveUpdatedTask(updated);
-      } else if (data.status === "conflict") {
-        const updated: Task = {
-          ...task,
-          title: data.title,
-          description: data.description,
-          status: "conflict",
-          scheduledStart: data.start,
-          scheduledEnd: data.end,
-          conflictMessage: data.conflictMessage,
-          errorMessage: undefined,
-          updatedAt: new Date().toISOString(),
-        };
-
-        await saveUpdatedTask(updated);
-      } else {
-        // error from API
+        if (data.status === "scheduled") {
+          const updated: Task = {
+            ...task,
+            title: data.title,
+            description: data.description,
+            status: "scheduled",
+            scheduledStart: data.start,
+            scheduledEnd: data.end,
+            calendarEventId: data.calendarEventId,
+            conflictMessage: undefined,
+            errorMessage: undefined,
+            updatedAt: new Date().toISOString(),
+          };
+          await saveUpdatedTask(updated);
+          if (task.serverId && navigator.onLine) {
+            fetch(`/api/tasks/${task.serverId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(updated),
+            }).catch(() => {});
+          }
+        } else if (data.status === "conflict") {
+          const updated: Task = {
+            ...task,
+            title: data.title,
+            description: data.description,
+            status: "conflict",
+            scheduledStart: data.start,
+            scheduledEnd: data.end,
+            conflictMessage: data.conflictMessage,
+            errorMessage: undefined,
+            updatedAt: new Date().toISOString(),
+          };
+          await saveUpdatedTask(updated);
+        } else {
+          const updated: Task = {
+            ...task,
+            status: "failed",
+            errorMessage: data.message ?? "Unknown error",
+            updatedAt: new Date().toISOString(),
+          };
+          await saveUpdatedTask(updated);
+        }
+      } catch {
         const updated: Task = {
           ...task,
           status: "failed",
-          errorMessage: data.message ?? "Unknown error",
+          errorMessage: "Network error. Please retry.",
           updatedAt: new Date().toISOString(),
         };
-
         await saveUpdatedTask(updated);
       }
-    } catch (err) {
-      const updated: Task = {
-        ...task,
-        status: "failed",
-        errorMessage: "Network error. Please retry.",
-        updatedAt: new Date().toISOString(),
-      };
+    },
+    [tasks, saveUpdatedTask]
+  );
 
-      await saveUpdatedTask(updated);
-    }
-  };
+  const retryScheduleTask = useCallback(
+    (id: string) => scheduleTask(id),
+    [scheduleTask]
+  );
 
-  // Retry is only for errors
-  const retryScheduleTask = (id: string) => scheduleTask(id);
+  const handleConflictEdit = useCallback(
+    async (id: string, newRawText: string) => {
+      await updateTaskText(id, newRawText);
+      await scheduleTask(id);
+    },
+    [updateTaskText, scheduleTask]
+  );
 
   return {
     tasks,
     loading,
-    addTask,               // now auto-schedules
+    addTask,
     updateTaskStatus,
     toggleComplete,
     updateTaskText,
     removeTask,
-    scheduleTask,          // for explicit calls if you want
-    retryScheduleTask,     // used by TaskRow "Retry"
+    scheduleTask,
+    retryScheduleTask,
+    handleConflictEdit,
   };
 }
