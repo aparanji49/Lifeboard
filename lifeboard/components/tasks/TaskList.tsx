@@ -24,7 +24,8 @@ export function TaskList({
   if (tasks.length === 0) {
     return (
       <p className="mt-4 text-center text-xs text-slate-500">
-        No tasks yet. Start by adding something below.
+        No tasks yet. Start by adding something below. <br />
+        E.g., &quot;Buy groceries tomorrow at 5pm&quot;
       </p>
     );
   }
