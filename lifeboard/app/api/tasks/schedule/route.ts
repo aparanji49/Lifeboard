@@ -1,9 +1,13 @@
 // app/api/tasks/schedule/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
+import type { calendar_v3 } from "googleapis";
 import OpenAI from "openai";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { prisma } from "@/lib/prisma";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -16,21 +20,15 @@ const TaskSchema = z.object({
   end: z.string(),
 });
 
-// --- Google Calendar client setup ---
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI
-);
-
-oauth2Client.setCredentials({
-  refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
-});
-
-const calendar = google.calendar({
-  version: "v3",
-  auth: oauth2Client,
-});
+function getCalendarForUser(refreshToken: string): calendar_v3.Calendar {
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI
+  );
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+  return google.calendar({ version: "v3", auth: oauth2Client });
+}
 
 // ---- helpers ----
 
@@ -73,7 +71,11 @@ async function parseTaskWithAI(text: string): Promise<ParsedTask> {
 /**
  * Check if time range conflicts with existing events.
  */
-async function hasConflict(start: string, end: string) {
+async function hasConflict(
+  calendar: calendar_v3.Calendar,
+  start: string,
+  end: string
+) {
   const res = await calendar.freebusy.query({
     requestBody: {
       timeMin: start,
@@ -103,9 +105,10 @@ async function hasConflict(start: string, end: string) {
 //   return res.data.id;
 // }
 
-async function createCalendarEvent(parsed: ParsedTask) {
-  console.log("[createCalendarEvent] Parsed task:", parsed);
-
+async function createCalendarEvent(
+  calendar: calendar_v3.Calendar,
+  parsed: ParsedTask
+) {
   const res = await calendar.events.insert({
     calendarId: "primary",
     requestBody: {
@@ -122,13 +125,6 @@ async function createCalendarEvent(parsed: ParsedTask) {
     },
   });
 
-  console.log("[createCalendarEvent] Event created:", {
-    id: res.data.id,
-    htmlLink: res.data.htmlLink,
-    start: res.data.start,
-    end: res.data.end,
-  });
-
   return res.data;
 }
 
@@ -136,6 +132,32 @@ async function createCalendarEvent(parsed: ParsedTask) {
 
 export async function POST(req: NextRequest) {
   try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { status: "error", message: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
+    const account = await prisma.account.findFirst({
+      where: {
+        userId: session.user.id,
+        provider: "google",
+      },
+    });
+
+    if (!account?.refresh_token) {
+      return NextResponse.json(
+        {
+          status: "error",
+          message:
+            "Google Calendar not linked. Sign out and sign in again with Google to grant calendar access.",
+        },
+        { status: 403 }
+      );
+    }
+
     const { text } = await req.json();
 
     if (!text || typeof text !== "string") {
@@ -145,11 +167,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const calendar = getCalendarForUser(account.refresh_token);
+
     // 1) LLM: parse natural language
     const parsed = await parseTaskWithAI(text);
 
     // 2) Calendar: check for conflicts
-    const busyBlocks = await hasConflict(parsed.start, parsed.end);
+    const busyBlocks = await hasConflict(calendar, parsed.start, parsed.end);
 
     if (busyBlocks) {
       const first = busyBlocks[0];
@@ -166,7 +190,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 3) No conflict → create event
-    const event = await createCalendarEvent(parsed);
+    const event = await createCalendarEvent(calendar, parsed);
 
     return NextResponse.json({
       status: "scheduled" as const,

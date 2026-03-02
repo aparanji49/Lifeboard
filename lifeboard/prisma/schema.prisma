@@ -1,0 +1,146 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User{
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  image     String?
+  emailVerified DateTime?
+
+  accounts  Account[]
+  sessions  Session[]
+
+  timezone  String   @default("UTC")
+
+  tasks     Task[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  refresh_token_expires_in Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  createdAt         DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Task{
+ id              String   @id @default(cuid())
+
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title           String
+  description     String?
+  userInstruction String?  // raw NL prompt (helpful for LLM debug)
+
+  // Once scheduled in Google Calendar
+  googleEventId   String?  @unique
+
+  schedulingStatus SchedulingStatus @default(NEW)
+  isCompleted      Boolean          @default(false)
+
+  // Final chosen schedule (after user approval)
+  startTime       DateTime?
+  endTime         DateTime?
+
+  // DB-light reliability
+  retryCount      Int      @default(0)
+  errorMessage    String?
+
+ // Persist popup options + allow "approve later"
+  proposals       TaskProposal[] @relation("TaskProposals")
+
+ // One chosen proposal per task (source of truth for selection)
+  selectedProposalId String? @unique
+  selectedProposal TaskProposal? @relation("SelectedProposal", fields: [selectedProposalId], references: [id], onDelete: SetNull)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId, schedulingStatus])
+  @@index([userId, startTime])
+}
+
+model TaskProposal {
+  id String @id @default(cuid())
+
+  taskId String
+  task   Task @relation("TaskProposals", fields: [taskId], references: [id], onDelete: Cascade)
+  selectedBy Task? @relation("SelectedProposal") 
+
+  proposedStart DateTime
+  proposedEnd   DateTime
+
+  // UI-friendly text + explanation (NOT chain-of-thought)
+  label  String?  // e.g., "Today 5:00–5:30 PM"
+  reason String?  // e.g., "No conflicts + matches evening preference"
+
+  // Recommendation marker for UI highlight
+  isRecommended Boolean @default(false)
+
+  // If you generate proposals again later, bump attempt (1,2,3...)
+  attempt Int @default(1)
+
+  // Optional sorting
+  rank Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([taskId, attempt])
+  @@index([taskId, isRecommended])
+}
+
+enum SchedulingStatus{
+  NEW
+  PROCESSING
+  PROPOSED
+  SCHEDULED
+  RETRY
+  ERROR
+}
