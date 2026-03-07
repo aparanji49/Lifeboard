@@ -9,9 +9,121 @@ import {
   addPendingOp,
   removePendingOp,
 } from "./db";
+import { getUserTimeContext } from "./getBrowserTimezone";
 
-export async function pushPendingOps(): Promise<{ pushed: number; errors: number }> {
-  const ops = await getPendingOps();
+async function processScheduleOps(ownerId: string) {
+  const ops = (await getPendingOps(ownerId)).filter((o) => o.type === "schedule");
+  for (const op of ops) {
+    const task = await db.tasks.get(op.localId);
+    if (!task) {
+      await removePendingOp(op.id);
+      continue;
+    }
+
+    // Only schedule tasks that still need scheduling
+    if (task.status !== "unscheduled" && task.status !== "failed") {
+      await removePendingOp(op.id);
+      continue;
+    }
+
+    try {
+      const res = await fetch("/api/tasks/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: task.rawText,
+          userTimeContext: getUserTimeContext(),
+        }),
+      });
+      const data = await res.json();
+
+      if (data.status === "scheduled") {
+        const updated = {
+          ...task,
+          title: data.title,
+          description: data.description,
+          status: "scheduled" as const,
+          scheduledStart: data.start,
+          scheduledEnd: data.end,
+          calendarEventId: data.calendarEventId,
+          conflictMessage: undefined,
+          errorMessage: undefined,
+          suggestions: undefined,
+          updatedAt: new Date().toISOString(),
+          syncStatus: "pending" as const,
+        };
+        await putTask(updated);
+
+        // Persist to server (create or patch)
+        const serverRes = await fetch(
+          updated.serverId ? `/api/tasks/${updated.serverId}` : "/api/tasks",
+          {
+            method: updated.serverId ? "PATCH" : "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(updated),
+          }
+        );
+
+        if (serverRes.ok) {
+          const row = serverRes.status === 204 ? null : await serverRes.json();
+          if (row && !updated.serverId) {
+            await putTask({
+              ...updated,
+              serverId: row.serverId ?? row.id,
+              syncStatus: "synced",
+            });
+          } else {
+            await putTask({ ...updated, syncStatus: "synced" });
+          }
+        } else {
+          addPendingOp({
+            id: nanoid(),
+            ownerId,
+            type: "create",
+            localId: updated.id,
+            serverId: updated.serverId,
+            payload: updated,
+            createdAt: new Date().toISOString(),
+          });
+        }
+
+        await removePendingOp(op.id);
+      } else if (data.status === "conflict") {
+        await putTask({
+          ...task,
+          title: data.title ?? task.title,
+          description: data.description ?? task.description,
+          status: "conflict",
+          scheduledStart: data.start,
+          scheduledEnd: data.end,
+          conflictMessage: data.conflictMessage,
+          suggestions: data.suggestions ?? [],
+          errorMessage: undefined,
+          updatedAt: new Date().toISOString(),
+        });
+        // conflict requires user action; remove schedule op
+        await removePendingOp(op.id);
+      } else {
+        await putTask({
+          ...task,
+          status: "failed",
+          errorMessage: data.message ?? "Unknown error",
+          updatedAt: new Date().toISOString(),
+        });
+        // keep in queue if it's a transient error? for now, remove to avoid infinite loops
+        await removePendingOp(op.id);
+      }
+    } catch {
+      // network failure -> stop processing to preserve FIFO and retry later
+      break;
+    }
+  }
+}
+
+export async function pushPendingOps(
+  ownerId: string
+): Promise<{ pushed: number; errors: number }> {
+  const ops = (await getPendingOps(ownerId)).filter((o) => o.type !== "schedule");
   let pushed = 0;
   let errors = 0;
 
@@ -54,12 +166,12 @@ export async function pushPendingOps(): Promise<{ pushed: number; errors: number
   return { pushed, errors };
 }
 
-export async function pullAndMerge(): Promise<Task[]> {
+export async function pullAndMerge(ownerId: string): Promise<Task[]> {
   const res = await fetch("/api/tasks");
-  if (!res.ok) return getAllTasks();
+  if (!res.ok) return getAllTasks(ownerId);
 
   const serverTasks: Task[] = await res.json();
-  const localTasks = await getAllTasks();
+  const localTasks = await getAllTasks(ownerId);
   const localByServerId = new Map<string, Task>();
   const localOnly: Task[] = [];
 
@@ -76,6 +188,7 @@ export async function pullAndMerge(): Promise<Task[]> {
       id: localByServerId.get(serverId)?.id ?? st.id,
       serverId,
       syncStatus: "synced",
+      ownerId,
     });
   }
 
@@ -86,20 +199,24 @@ export async function pullAndMerge(): Promise<Task[]> {
   return merged;
 }
 
-export async function syncWhenOnline(): Promise<Task[]> {
-  if (!navigator.onLine) return getAllTasks();
-  await pushPendingOps();
-  return pullAndMerge();
+export async function syncWhenOnline(ownerId: string): Promise<Task[]> {
+  if (!navigator.onLine) return getAllTasks(ownerId);
+  // 1) run scheduling queue FIFO first
+  await processScheduleOps(ownerId);
+  await pushPendingOps(ownerId);
+  return pullAndMerge(ownerId);
 }
 
 export function queuePendingOp(
   type: PendingOp["type"],
+  ownerId: string,
   localId: string,
   serverId: string | undefined,
   payload: Partial<Task> | null
 ): void {
   addPendingOp({
     id: nanoid(),
+    ownerId,
     type,
     localId,
     serverId,
