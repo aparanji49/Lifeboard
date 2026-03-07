@@ -4,7 +4,7 @@ import { FormEvent, useState, useEffect } from "react";
 import { Loader2, WifiOff } from "lucide-react";
 
 interface TaskInputProps {
-  onSubmit: (title: string) => void;
+  onSubmit: (title: string) => void | Promise<void>;
 }
 
 type TaskStatus = 
@@ -57,15 +57,26 @@ export function TaskInput({ onSubmit }: TaskInputProps) {
     if (!trimmed || status !== 'idle' && status !== 'error') return;
 
     if (!navigator.onLine) {
-        setStatus("offline");
-        onSubmit(trimmed); // Still submit to trigger IndexedDB logic
-        setValue("");
-        return;
+      setStatus("offline");
+      void onSubmit(trimmed); // Still submit to trigger IndexedDB logic
+      setValue("");
+      return;
     }
 
-    setStatus("parsing"); 
-    onSubmit(trimmed);
-    setValue("");
+    setStatus("parsing");
+    try {
+      const maybePromise = onSubmit(trimmed);
+      setValue("");
+      if (maybePromise && typeof (maybePromise as any).then === "function") {
+        (maybePromise as Promise<void>)
+          .then(() => setStatus("idle"))
+          .catch(() => setStatus("error"));
+      } else {
+        setStatus("idle");
+      }
+    } catch {
+      setStatus("error");
+    }
   };
 
   const isProcessing = status !== "idle" && status !== "error" && status !== "offline";

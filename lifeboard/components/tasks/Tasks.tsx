@@ -12,10 +12,9 @@ export default function Tasks() {
     loading,
     addTask,
     toggleComplete,
-    updateTaskText,
     retryScheduleTask,
-    removeTask,
     handleConflictEdit,
+    scheduleWithSlot,
   } = useTasks();
 
   const total = tasks.length;
@@ -23,7 +22,7 @@ export default function Tasks() {
   const scheduledCount = tasks.filter((t) => t.status === "scheduled").length;
 
   return (
-    <div className="flex flex-col lifeboard-card">
+    <div className="flex flex-col lifeboard-card w-full max-w-5xl mx-auto px-4">
       <TaskHeader
         total={total}
         openCount={openCount}
@@ -37,10 +36,9 @@ export default function Tasks() {
           <TaskList
             tasks={tasks}
             onToggleComplete={toggleComplete}
-            onEditTitle={updateTaskText}
             onRetrySchedule={retryScheduleTask}
             onConflictEdit={handleConflictEdit}
-            onDeleteTask={removeTask}
+            onPickSlot={scheduleWithSlot}
           />
         )}
 

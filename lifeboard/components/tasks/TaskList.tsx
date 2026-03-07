@@ -7,19 +7,17 @@ import { TaskRow } from "./TaskRow";
 interface TaskListProps {
   tasks: Task[];
   onToggleComplete: (id: string) => void;
-  onEditTitle: (id: string, text: string) => void;
   onRetrySchedule: (id: string) => void;
   onConflictEdit: (id: string, newRawText: string) => void;
-  onDeleteTask: (id: string) => void;
+  onPickSlot: (id: string, slot: { start: string; end: string }) => void;
 }
 
 export function TaskList({
   tasks,
   onToggleComplete,
-  onEditTitle,
   onRetrySchedule,
   onConflictEdit,
-  onDeleteTask,
+  onPickSlot,
 }: TaskListProps) {
   if (tasks.length === 0) {
     return (
@@ -37,7 +35,6 @@ export function TaskList({
           key={task.id}
           task={task}
           onToggleComplete={() => onToggleComplete(task.id)}
-          onEditTitle={(txt) => onEditTitle(task.id, txt)}
           onRetrySchedule={
             task.status === "failed"
               ? () => onRetrySchedule(task.id)
@@ -48,7 +45,11 @@ export function TaskList({
               ? (newText) => onConflictEdit(task.id, newText)
               : undefined
           }
-          onDelete={() => onDeleteTask(task.id)}
+          onPickSlot={
+            task.status === "conflict"
+              ? (slot) => onPickSlot(task.id, slot)
+              : undefined
+          }
         />
       ))}
     </div>
