@@ -20,17 +20,17 @@ export const authOptions: AuthOptions = {
           access_type: "offline",
           response_type: "code",
           scope:
-            "openid email profile https://www.googleapis.com/auth/calendar.events",
+            "openid email profile https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events",
         },
       },
     }),
   ],
   callbacks: {
     async signIn(params) {
-      console.log(
-        "[NextAuth] signIn callback params",
-        JSON.stringify(params, null, 2)
-      );
+      // console.log(
+      //   "[NextAuth] signIn callback params",
+      //   JSON.stringify(params, null, 2)
+      // );
       return true;
     },
     async session({ session, user }) {
@@ -43,7 +43,7 @@ export const authOptions: AuthOptions = {
   },
   events: {
     async signIn(message) {
-      console.log("[NextAuth] events.signIn", message);
+      // console.log("[NextAuth] events.signIn", message);
     },
   },
   logger: {
