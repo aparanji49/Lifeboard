@@ -7,16 +7,23 @@ export class LifeboardDB extends Dexie {
 
   constructor() {
     super("lifeboard-db");
-    this.version(2).stores({
-      tasks: "id, serverId, syncStatus, updatedAt",
-      pendingOps: "id, localId, createdAt",
+    this.version(3).stores({
+      tasks: "id, ownerId, serverId, syncStatus, updatedAt",
+      pendingOps: "id, ownerId, localId, createdAt",
     });
   }
 }
 
 export const db = new LifeboardDB();
 
-export async function getAllTasks(): Promise<Task[]> {
+export async function getAllTasks(ownerId?: string): Promise<Task[]> {
+  if (ownerId) {
+    return db.tasks
+      .where("ownerId")
+      .equals(ownerId)
+      .sortBy("updatedAt")
+      .then((rows) => rows.reverse());
+  }
   return db.tasks.orderBy("updatedAt").reverse().toArray();
 }
 
@@ -32,7 +39,10 @@ export async function deleteTask(id: string): Promise<void> {
   await db.tasks.delete(id);
 }
 
-export async function getPendingOps(): Promise<PendingOp[]> {
+export async function getPendingOps(ownerId?: string): Promise<PendingOp[]> {
+  if (ownerId) {
+    return db.pendingOps.where("ownerId").equals(ownerId).sortBy("createdAt");
+  }
   return db.pendingOps.orderBy("createdAt").toArray();
 }
 
