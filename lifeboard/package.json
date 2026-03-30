@@ -31,7 +31,7 @@
     "lucide-react": "^0.554.0",
     "motion": "^12.23.24",
     "nanoid": "^5.1.6",
-    "next": "16.0.3",
+    "next": "16.0.10",
     "next-auth": "^4.24.13",
     "openai": "^6.10.0",
     "quote-guru": "^1.0.1",
