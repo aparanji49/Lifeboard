@@ -1,7 +1,7 @@
 # Lifeboard
 
 A personal productivity dashboard built on **Next.js** (App Router) and **React**. It combines task management, natural-language scheduling against **Google Calendar**, an **LLM-backed scheduling agent**, and lightweight home-screen widgets (clock, greeting, weather, quotes).
-
+Link to deployed app: [Lifeboard](https://lifeboard-tawny.vercel.app/)
 **UI Mockups (Figma):** [Lifeboard Design](https://www.figma.com/design/hWSTkY7dVyAbxoZVxs5phx/Lifeboard?node-id=0-1&t=Is7fH2M8o8JCQe41-1)
 
 ---
