@@ -2,6 +2,7 @@
 
 import { FormEvent, useState, useEffect } from "react";
 import { Loader2, WifiOff } from "lucide-react";
+import { TASK_INPUT_TEXT_MAX_CHARS } from "@/lib/aiInputLimits";
 
 interface TaskInputProps {
   onSubmit: (title: string) => void | Promise<void>;
@@ -67,7 +68,7 @@ export function TaskInput({ onSubmit }: TaskInputProps) {
     try {
       const maybePromise = onSubmit(trimmed);
       setValue("");
-      if (maybePromise && typeof (maybePromise as any).then === "function") {
+      if (maybePromise && typeof (maybePromise as Promise<void>).then === "function") {
         (maybePromise as Promise<void>)
           .then(() => setStatus("idle"))
           .catch(() => setStatus("error"));
@@ -87,6 +88,7 @@ export function TaskInput({ onSubmit }: TaskInputProps) {
         className="flex-1 w-full rounded-full border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-black/10 disabled:bg-slate-50"
         placeholder="What do you want to do…."
         value={value}
+        maxLength={TASK_INPUT_TEXT_MAX_CHARS}
         disabled={isProcessing}
         onChange={(e) => setValue(e.target.value)}
       />

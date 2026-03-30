@@ -2,6 +2,7 @@
 "use client";
 
 import type { AvailabilitySlot, Task } from "@/types/tasks";
+import { TASK_INPUT_TEXT_MAX_CHARS } from "@/lib/aiInputLimits";
 import { TaskStatusPill } from "./TaskStatusPill";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -30,10 +31,19 @@ export function TaskRow({
   const handleConflictEdit = () => {
     if (!onConflictEdit) return;
     const updated = prompt(
-      "Update this task before scheduling",
-      (task as any).rawText ?? task.title
+      `Update this task before scheduling (max ${TASK_INPUT_TEXT_MAX_CHARS.toLocaleString()} characters)`,
+      task.rawText ?? task.title
     );
-    if (updated && updated.trim()) onConflictEdit(updated.trim());
+    if (updated == null) return;
+    const trimmed = updated.trim();
+    if (!trimmed) return;
+    if (trimmed.length > TASK_INPUT_TEXT_MAX_CHARS) {
+      window.alert(
+        `Text must be at most ${TASK_INPUT_TEXT_MAX_CHARS.toLocaleString()} characters. Please shorten it and try Edit again.`
+      );
+      return;
+    }
+    onConflictEdit(trimmed);
   };
 
   return (

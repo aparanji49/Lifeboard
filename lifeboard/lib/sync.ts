@@ -10,6 +10,11 @@ import {
   removePendingOp,
 } from "./db";
 import { getUserTimeContext } from "./getBrowserTimezone";
+import {
+  isScheduleRateLimited,
+  parseJsonObject,
+  scheduleErrorUserMessage,
+} from "./scheduleApiErrors";
 
 async function processScheduleOps(ownerId: string) {
   const ops = (await getPendingOps(ownerId)).filter((o) => o.type === "schedule");
@@ -35,17 +40,26 @@ async function processScheduleOps(ownerId: string) {
           userTimeContext: getUserTimeContext(),
         }),
       });
-      const data = await res.json();
+      const data = parseJsonObject(await res.text()) ?? {};
 
-      if (data.status === "scheduled") {
+      if (isScheduleRateLimited(res.status)) {
+        // Keep schedule op in queue; retry on next online sync (FIFO preserved).
+        break;
+      }
+
+      const apiStatus = typeof data.status === "string" ? data.status : "";
+
+      if (apiStatus === "scheduled") {
         const updated = {
           ...task,
-          title: data.title,
-          description: data.description,
+          title: typeof data.title === "string" ? data.title : task.title,
+          description:
+            typeof data.description === "string" ? data.description : task.description,
           status: "scheduled" as const,
-          scheduledStart: data.start,
-          scheduledEnd: data.end,
-          calendarEventId: data.calendarEventId,
+          scheduledStart: typeof data.start === "string" ? data.start : undefined,
+          scheduledEnd: typeof data.end === "string" ? data.end : undefined,
+          calendarEventId:
+            typeof data.calendarEventId === "string" ? data.calendarEventId : undefined,
           conflictMessage: undefined,
           errorMessage: undefined,
           suggestions: undefined,
@@ -88,16 +102,18 @@ async function processScheduleOps(ownerId: string) {
         }
 
         await removePendingOp(op.id);
-      } else if (data.status === "conflict") {
+      } else if (apiStatus === "conflict") {
         await putTask({
           ...task,
-          title: data.title ?? task.title,
-          description: data.description ?? task.description,
+          title: typeof data.title === "string" ? data.title : task.title,
+          description:
+            typeof data.description === "string" ? data.description : task.description,
           status: "conflict",
-          scheduledStart: data.start,
-          scheduledEnd: data.end,
-          conflictMessage: data.conflictMessage,
-          suggestions: data.suggestions ?? [],
+          scheduledStart: typeof data.start === "string" ? data.start : undefined,
+          scheduledEnd: typeof data.end === "string" ? data.end : undefined,
+          conflictMessage:
+            typeof data.conflictMessage === "string" ? data.conflictMessage : undefined,
+          suggestions: Array.isArray(data.suggestions) ? data.suggestions : [],
           errorMessage: undefined,
           updatedAt: new Date().toISOString(),
         });
@@ -107,7 +123,7 @@ async function processScheduleOps(ownerId: string) {
         await putTask({
           ...task,
           status: "failed",
-          errorMessage: data.message ?? "Unknown error",
+          errorMessage: scheduleErrorUserMessage(res.status, data),
           updatedAt: new Date().toISOString(),
         });
         // keep in queue if it's a transient error? for now, remove to avoid infinite loops

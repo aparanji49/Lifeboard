@@ -12,6 +12,11 @@ import {
 import { syncWhenOnline, queuePendingOp } from "@/lib/sync";
 import { getUserTimeContext } from "@/lib/getBrowserTimezone";
 import { timeDebug } from "@/lib/timeDebug";
+import {
+  parseJsonObject,
+  scheduleErrorUserMessage,
+  scheduleProgressOnFailure,
+} from "@/lib/scheduleApiErrors";
 
 export function useTasks() {
   const { data: session, status: sessionStatus } = useSession();
@@ -31,8 +36,19 @@ export function useTasks() {
 
   useEffect(() => {
     if (sessionStatus === "loading") return;
-    loadTasks().then(() => setLoading(false));
-  }, [loadTasks]);
+    let cancelled = false;
+    (async () => {
+      try {
+        await loadTasks();
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionStatus, loadTasks]);
 
   useEffect(() => {
     if (!navigator.onLine) return;
@@ -70,6 +86,107 @@ export function useTasks() {
     },
     [saveUpdatedTask]
   );
+
+  const scheduleTask = useCallback(async (id: string, taskOverride?: Task) => {
+    const existing = tasks.find((t) => t.id === id);
+    const task = taskOverride ?? existing;
+    if (!task) return;
+
+    try {
+      const t1 = await appendProgress(task, "Calling scheduling API...");
+      timeDebug("useTasks scheduleTask (text)", { text: task.rawText?.slice(0, 80), taskId: id });
+      const res = await fetch("/api/tasks/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: task.rawText,
+          userTimeContext: getUserTimeContext(),
+        }),
+      });
+      const data = parseJsonObject(await res.text()) ?? {};
+      const apiStatus = typeof data.status === "string" ? data.status : "";
+
+      if (apiStatus === "scheduled") {
+        const updated: Task = {
+          ...t1,
+          title: typeof data.title === "string" ? data.title : t1.title,
+          description:
+            typeof data.description === "string" ? data.description : t1.description,
+          status: "scheduled",
+          scheduledStart: typeof data.start === "string" ? data.start : undefined,
+          scheduledEnd: typeof data.end === "string" ? data.end : undefined,
+          calendarEventId:
+            typeof data.calendarEventId === "string" ? data.calendarEventId : undefined,
+          conflictMessage: undefined,
+          errorMessage: undefined,
+          updatedAt: new Date().toISOString(),
+          progress: [
+            ...(t1.progress ?? []),
+            { ts: new Date().toISOString(), message: "Scheduled in Google Calendar." },
+          ].slice(-20),
+          suggestions: undefined,
+        };
+        await saveUpdatedTask(updated);
+        if (task.serverId && navigator.onLine) {
+          fetch(`/api/tasks/${task.serverId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(updated),
+          }).catch(() => {});
+        }
+        return updated;
+      } else if (apiStatus === "conflict") {
+        const updated: Task = {
+          ...t1,
+          title: typeof data.title === "string" ? data.title : t1.title,
+          description:
+            typeof data.description === "string" ? data.description : t1.description,
+          status: "conflict",
+          scheduledStart: typeof data.start === "string" ? data.start : undefined,
+          scheduledEnd: typeof data.end === "string" ? data.end : undefined,
+          conflictMessage:
+            typeof data.conflictMessage === "string" ? data.conflictMessage : undefined,
+          suggestions: Array.isArray(data.suggestions) ? data.suggestions : [],
+          errorMessage: undefined,
+          updatedAt: new Date().toISOString(),
+          progress: [
+            ...(t1.progress ?? []),
+            { ts: new Date().toISOString(), message: "Conflict detected." },
+          ].slice(-20),
+        };
+        await saveUpdatedTask(updated);
+        return updated;
+      } else {
+        const errMsg = scheduleErrorUserMessage(res.status, data);
+        const progressMsg = scheduleProgressOnFailure(res.status);
+        const updated: Task = {
+          ...t1,
+          status: "failed",
+          errorMessage: errMsg,
+          updatedAt: new Date().toISOString(),
+          progress: [
+            ...(t1.progress ?? []),
+            { ts: new Date().toISOString(), message: progressMsg },
+          ].slice(-20),
+        };
+        await saveUpdatedTask(updated);
+        return updated;
+      }
+    } catch {
+      const updated: Task = {
+        ...task,
+        status: "failed",
+        errorMessage: "Network error. Please retry.",
+        updatedAt: new Date().toISOString(),
+        progress: [
+          ...(task.progress ?? []),
+          { ts: new Date().toISOString(), message: "Network error while scheduling." },
+        ].slice(-20),
+      };
+      await saveUpdatedTask(updated);
+      return updated;
+    }
+  }, [tasks, saveUpdatedTask, appendProgress]);
 
   const addTask = useCallback(
     async (text: string) => {
@@ -129,7 +246,7 @@ export function useTasks() {
         queuePendingOp("create", ownerId, newTask.id, undefined, newTask);
       }
     },
-    [ownerId, saveUpdatedTask, appendProgress]
+    [ownerId, saveUpdatedTask, appendProgress, scheduleTask]
   );
 
   const updateTaskStatus = useCallback(
@@ -233,103 +350,6 @@ export function useTasks() {
     [tasks, ownerId]
   );
 
-  const scheduleTask = useCallback(
-    async (id: string, taskOverride?: Task) => {
-      const existing = tasks.find((t) => t.id === id);
-      const task = taskOverride ?? existing;
-      if (!task) return;
-
-      try {
-        const t1 = await appendProgress(task, "Calling scheduling API...");
-        timeDebug("useTasks scheduleTask (text)", { text: task.rawText?.slice(0, 80), taskId: id });
-        const res = await fetch("/api/tasks/schedule", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: task.rawText,
-            userTimeContext: getUserTimeContext(),
-          }),
-        });
-        const data = await res.json();
-
-        if (data.status === "scheduled") {
-          const updated: Task = {
-            ...t1,
-            title: data.title,
-            description: data.description,
-            status: "scheduled",
-            scheduledStart: data.start,
-            scheduledEnd: data.end,
-            calendarEventId: data.calendarEventId,
-            conflictMessage: undefined,
-            errorMessage: undefined,
-            updatedAt: new Date().toISOString(),
-            progress: [
-              ...(t1.progress ?? []),
-              { ts: new Date().toISOString(), message: "Scheduled in Google Calendar." },
-            ].slice(-20),
-            suggestions: undefined,
-          };
-          await saveUpdatedTask(updated);
-          if (task.serverId && navigator.onLine) {
-            fetch(`/api/tasks/${task.serverId}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(updated),
-            }).catch(() => {});
-          }
-          return updated;
-        } else if (data.status === "conflict") {
-          const updated: Task = {
-            ...t1,
-            title: data.title,
-            description: data.description,
-            status: "conflict",
-            scheduledStart: data.start,
-            scheduledEnd: data.end,
-            conflictMessage: data.conflictMessage,
-            suggestions: data.suggestions ?? [],
-            errorMessage: undefined,
-            updatedAt: new Date().toISOString(),
-            progress: [
-              ...(t1.progress ?? []),
-              { ts: new Date().toISOString(), message: "Conflict detected." },
-            ].slice(-20),
-          };
-          await saveUpdatedTask(updated);
-          return updated;
-        } else {
-          const updated: Task = {
-            ...t1,
-            status: "failed",
-            errorMessage: data.message ?? "Unknown error",
-            updatedAt: new Date().toISOString(),
-            progress: [
-              ...(t1.progress ?? []),
-              { ts: new Date().toISOString(), message: "Scheduling failed." },
-            ].slice(-20),
-          };
-          await saveUpdatedTask(updated);
-          return updated;
-        }
-      } catch {
-        const updated: Task = {
-          ...task,
-          status: "failed",
-          errorMessage: "Network error. Please retry.",
-          updatedAt: new Date().toISOString(),
-          progress: [
-            ...(task.progress ?? []),
-            { ts: new Date().toISOString(), message: "Network error while scheduling." },
-          ].slice(-20),
-        };
-        await saveUpdatedTask(updated);
-        return updated;
-      }
-    },
-    [tasks, saveUpdatedTask, appendProgress]
-  );
-
   const scheduleWithSlot = useCallback(
     async (id: string, slot: { start: string; end: string }) => {
       const task = tasks.find((t) => t.id === id);
@@ -359,13 +379,22 @@ export function useTasks() {
             userTimeContext: getUserTimeContext(),
           }),
         });
-        const data = await res.json();
-        if (data.status !== "scheduled") {
+        const data = parseJsonObject(await res.text()) ?? {};
+        const apiStatus = typeof data.status === "string" ? data.status : "";
+        if (apiStatus !== "scheduled") {
+          const errMsg = scheduleErrorUserMessage(res.status, data);
           await saveUpdatedTask({
             ...t1,
             status: "failed",
-            errorMessage: data.message ?? "Could not schedule selected slot.",
+            errorMessage: errMsg,
             updatedAt: new Date().toISOString(),
+            progress: [
+              ...(t1.progress ?? []),
+              {
+                ts: new Date().toISOString(),
+                message: scheduleProgressOnFailure(res.status),
+              },
+            ].slice(-20),
           });
           return;
         }
@@ -373,9 +402,10 @@ export function useTasks() {
         const updated: Task = {
           ...t1,
           status: "scheduled",
-          scheduledStart: data.start,
-          scheduledEnd: data.end,
-          calendarEventId: data.calendarEventId,
+          scheduledStart: typeof data.start === "string" ? data.start : undefined,
+          scheduledEnd: typeof data.end === "string" ? data.end : undefined,
+          calendarEventId:
+            typeof data.calendarEventId === "string" ? data.calendarEventId : undefined,
           conflictMessage: undefined,
           errorMessage: undefined,
           suggestions: undefined,
