@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
 const ERROR_MESSAGES: Record<string, string> = {
   OAuthCallback:
@@ -19,7 +20,7 @@ const ERROR_MESSAGES: Record<string, string> = {
     "Sign-in failed. Please try again.",
 };
 
-export default function SignInPage() {
+function SignInContent() {
   const searchParams = useSearchParams();
   const errorCode = searchParams.get("error");
   const errorMessage = errorCode
@@ -71,5 +72,25 @@ export default function SignInPage() {
         </button>
       </div>
     </div>
+  );
+}
+
+export default function SignInPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen flex-col items-center justify-center px-4">
+          <Image
+            src="/logo.png"
+            alt="LifeBoard"
+            width={200}
+            height={20}
+            priority
+          />
+        </div>
+      }
+    >
+      <SignInContent />
+    </Suspense>
   );
 }
