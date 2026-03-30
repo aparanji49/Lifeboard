@@ -1,4 +1,4 @@
-import { Annotation, END, StateGraph } from "@langchain/langgraph";
+import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
 
@@ -273,6 +273,7 @@ export const agentGraph = new StateGraph(GraphStateAnnotation)
   .addNode("computeAvail", computeAvail)
   .addNode("maybeCreateTask", maybeCreateTask)
   .addNode("finalize", finalize)
+  .addEdge(START, "routeIntent")
   // Branch via condition after routeIntent:
   .addConditionalEdges("routeIntent", (s) => s.intent, {
     CREATE_TASK: "parseCreateDraft",
