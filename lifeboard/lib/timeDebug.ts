@@ -1,8 +1,39 @@
 /**
  * Debug logging for time/window processing. Grep for "[time-debug]" to trace where
  * start/end dates flow and to spot wrong years (e.g. 2023 instead of 2025).
+ *
+ * - **Production**: off by default (no user text or noisy logs).
+ * - **Development**: on.
+ * - **Production override**: set `TIME_DEBUG=1` to enable (still redacts long user fields).
  */
 const PREFIX = "[time-debug]";
+
+const timeDebugEnabled =
+  process.env.TIME_DEBUG === "1" ||
+  (process.env.NODE_ENV !== "production" && process.env.TIME_DEBUG !== "0");
+
+/** Keys that may contain user-provided content — never log raw values when enabled. */
+const SENSITIVE_KEYS = new Set([
+  "text",
+  "rawText",
+  "description",
+  "title",
+  "userInstruction",
+]);
+
+function redactSensitive(payload: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(payload)) {
+    if (SENSITIVE_KEYS.has(k) && typeof v === "string") {
+      out[k] = `[${v.length} chars]`;
+    } else if (k === "userTimeContext" && v && typeof v === "object") {
+      out[k] = { present: true };
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
 
 function extractYear(iso: string): string {
   if (typeof iso !== "string" || iso.length < 4) return "?";
@@ -30,5 +61,7 @@ function enrichPayload(payload: Record<string, unknown>): Record<string, unknown
 }
 
 export function timeDebug(label: string, payload: Record<string, unknown>): void {
-  console.log(PREFIX, label, JSON.stringify(enrichPayload(payload)));
+  if (!timeDebugEnabled) return;
+  const safe = redactSensitive(payload);
+  console.log(PREFIX, label, JSON.stringify(enrichPayload(safe)));
 }
