@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
-// import { getUserTimeContext } from "@/lib/getBrowserTimezone";
 
 interface Quote {
   text: string;
   author: string;
 }
+
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 
 export default function Greeting() {
   const { data: session, status } = useSession();
@@ -18,32 +19,23 @@ export default function Greeting() {
   const day = new Date().toLocaleDateString("en-US", { weekday: "long" });
 
   const [quote, setQuote] = useState<Quote | null>(null);
-  const API_KEY = process.env.NEXT_PUBLIC_API_NINJAS_KEY!;
 
   useEffect(() => {
-    const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
-
-    const intervalId = setInterval(() => {
-      fetch(
-        "https://api.api-ninjas.com/v2/randomquotes?categories=inspirational,courage",
-        {
-          method: "GET",
-          headers: {
-            "X-Api-Key": API_KEY,
-          },
-        }
-      )
-        .then((response) => response.json())
-        .then((data) => {
-          const nextQuote = { text: data[0].quote, author: data[0].author };
-          setQuote(nextQuote);
-        });
-    }, TWENTY_FOUR_HOURS);
-
-    return () => {
-      clearInterval(intervalId);
+    const load = () => {
+      fetch("/api/quote")
+        .then((response) => (response.ok ? response.json() : Promise.reject()))
+        .then((data: { text?: string; author?: string }) => {
+          if (data.text && data.author) {
+            setQuote({ text: data.text, author: data.author });
+          }
+        })
+        .catch(() => {});
     };
-  }, [API_KEY]);
+
+    load();
+    const intervalId = setInterval(load, TWENTY_FOUR_HOURS_MS);
+    return () => clearInterval(intervalId);
+  }, []);
 
   return (
     <div className="flex flex-col items-center justify-center py-4">

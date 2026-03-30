@@ -1,5 +1,5 @@
 "use client";
-import { MoveDownIcon, MoveUpIcon, SunIcon } from "lucide-react";
+import { MoveDownIcon, MoveUpIcon } from "lucide-react";
 
 import {
   Widget,
@@ -27,39 +27,32 @@ interface WeatherData {
 }
 
 export default function WidgetWeather() {
-     const [location, setLocation] = useState<LocationData | null>(null);
+  const [location, setLocation] = useState<LocationData | null>(null);
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [loading, setLoading] = useState(true);
-  
-    const API_KEY = process.env.NEXT_PUBLIC_OPENWEATHER_KEY!;
- 
+
   useEffect(() => {
-    // STEP 1: Get user city/region/country
     fetch("https://ipapi.co/json/")
       .then((res) => res.json())
       .then((data) => {
-        const loc = {
-          city: data.city,
-          region: data.region,
-          country_name: data.country_name,
-        };
-        setLocation(loc);
-
-        // STEP 2: Fetch weather using detected city
-        return fetch(
-          `https://api.openweathermap.org/data/2.5/weather?q=${loc.city}&appid=${API_KEY}&units=imperial`
-        );
-      })
-      .then((res) => res.json())
-      .then((weatherData) => {
-        setWeather({
-          temp: weatherData.main.temp,
-          description: weatherData.weather[0].description,
-          icon: weatherData.weather[0].icon,
-          feels_like: weatherData.main.feels_like,
-          temp_min: weatherData.main.temp_min,
-          temp_max: weatherData.main.temp_max,
+        const params = new URLSearchParams({
+          city: String(data.city ?? ""),
+          cc: String(data.country_code ?? ""),
+          region: String(data.region ?? ""),
+          country: String(data.country_name ?? ""),
         });
+        return fetch(`/api/weather?${params.toString()}`);
+      })
+      .then((res) => {
+        if (!res.ok) throw new Error("weather proxy");
+        return res.json() as Promise<{
+          location: LocationData;
+          weather: WeatherData;
+        }>;
+      })
+      .then((payload) => {
+        setLocation(payload.location);
+        setWeather(payload.weather);
       })
       .catch((err) => console.error(err))
       .finally(() => setLoading(false));
@@ -86,10 +79,17 @@ export default function WidgetWeather() {
         <WidgetTitle>{location.city}</WidgetTitle>
         <div className="flex flex-col">
           <div className="flex items-center gap-x-2">
-            <Image  src={`https://openweathermap.org/img/wn/${weather.icon}.png`} height={100} width={100} alt={`${weather.description}`}/>
+            <Image
+              src={`https://openweathermap.org/img/wn/${weather.icon}.png`}
+              height={100}
+              width={100}
+              alt={`${weather.description}`}
+            />
             <Label className="text-4xl">{Math.round(weather.temp)}&deg;F</Label>
           </div>
-          <Label className="text-muted-foreground">Feels Like {Math.round(weather.feels_like)}&deg;F</Label>
+          <Label className="text-muted-foreground">
+            Feels Like {Math.round(weather.feels_like)}&deg;F
+          </Label>
         </div>
       </WidgetHeader>
       <WidgetContent className="items-end">
