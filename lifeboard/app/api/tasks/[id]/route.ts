@@ -1,5 +1,6 @@
 import { getServerSession } from "next-auth";
 import { NextRequest, NextResponse } from "next/server";
+import type { SchedulingStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { prismaTaskToClient, clientTaskToPrismaPayload } from "@/lib/taskMapper";
@@ -46,7 +47,15 @@ export async function PATCH(
   }
 
   const body = (await req.json()) as Partial<Task>;
-  const payload = clientTaskToPrismaPayload({ ...prismaTaskToClient(row), ...body });
+  const merged = { ...prismaTaskToClient(row), ...body };
+  const payload = clientTaskToPrismaPayload(merged);
+
+  // When marking incomplete (completed → not completed), keep DB scheduling status
+  // so the task restores to "scheduled" / "conflict" / etc. instead of "unscheduled".
+  if (row.isCompleted && !payload.isCompleted) {
+    (payload as { schedulingStatus: SchedulingStatus }).schedulingStatus =
+      row.schedulingStatus;
+  }
 
   const updated = await prisma.task.update({
     where: { id },

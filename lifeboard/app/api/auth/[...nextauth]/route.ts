@@ -5,8 +5,36 @@ import GoogleProvider from "next-auth/providers/google";
 import { PrismaAdapter } from "@next-auth/prisma-adapter";
 import { prisma } from "@/lib/prisma";
 
+const NEXTAUTH_URL = process.env.NEXTAUTH_URL;
+const isHttps = NEXTAUTH_URL?.startsWith("https://") === true;
+
+if (process.env.NODE_ENV === "production") {
+  if (!process.env.NEXTAUTH_SECRET) {
+    console.warn(
+      "[NextAuth] NEXTAUTH_SECRET is missing — set a strong secret in production."
+    );
+  }
+  if (!isHttps) {
+    console.warn(
+      "[NextAuth] NEXTAUTH_URL should use https:// in production for secure cookies and OAuth."
+    );
+  }
+}
+
 export const authOptions: AuthOptions = {
   adapter: PrismaAdapter(prisma),
+  /** Required in production; do not rely on implicit hashing of options. */
+  secret: process.env.NEXTAUTH_SECRET,
+  /**
+   * HTTPS sites: secure, httpOnly session cookies. Local http://localhost stays usable.
+   * @see https://next-auth.js.org/configuration/options#usesecurecookies
+   */
+  useSecureCookies: isHttps,
+  session: {
+    // Prisma adapter defaults strategy to "database"
+    maxAge: 30 * 24 * 60 * 60, // 30 days
+    updateAge: 24 * 60 * 60, // roll session expiry at most once per 24h of activity
+  },
   pages: {
     signIn: "/auth/signin",
   },

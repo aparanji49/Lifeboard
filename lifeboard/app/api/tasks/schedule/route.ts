@@ -10,7 +10,13 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { prisma } from "@/lib/prisma";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { computeAvailability } from "@/lib/agent/availability";
+import { devLog, logErrorSafe } from "@/lib/devLog";
 import { timeDebug } from "@/lib/timeDebug";
+import { checkRouteRateLimit, getRequestIp } from "@/lib/rateLimit";
+import {
+  AI_ROUTE_LIMITS,
+  readLimitedJsonBody,
+} from "@/lib/requestPayloadLimits";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -23,25 +29,34 @@ const TaskSchema = z.object({
   end: z.string(),
 });
 
+const L = AI_ROUTE_LIMITS;
+
 const OverrideSchema = z.object({
-  title: z.string(),
-  description: z.string().optional(),
-  start: z.string(),
-  end: z.string(),
+  title: z.string().min(1).max(L.overrideTitleMaxChars),
+  description: z.string().max(L.overrideDescriptionMaxChars).optional(),
+  start: z.string().min(1).max(L.isoDateTimeMaxChars),
+  end: z.string().min(1).max(L.isoDateTimeMaxChars),
 });
 
 const UserTimeContextSchema = z.object({
-  timestamp: z.string(),
-  timezone: z.string(),
-  localTime: z.string(),
+  timestamp: z.string().max(L.userTimeTimestampMaxChars),
+  timezone: z.string().max(L.timeZoneMaxChars),
+  localTime: z.string().max(L.userTimeLocalTimeMaxChars),
 });
 
-const ScheduleRequestSchema = z.object({
-  text: z.string().optional(),
-  override: OverrideSchema.optional(),
-  timeZone: z.string().optional(),
-  userTimeContext: UserTimeContextSchema.optional(),
-});
+const ScheduleRequestSchema = z
+  .object({
+    text: z.string().max(L.scheduleTextMaxChars).optional(),
+    override: OverrideSchema.optional(),
+    timeZone: z.string().max(L.timeZoneMaxChars).optional(),
+    userTimeContext: UserTimeContextSchema.optional(),
+  })
+  .refine(
+    (data) =>
+      data.override != null ||
+      (typeof data.text === "string" && data.text.trim().length > 0),
+    { message: "Provide either text or override." }
+  );
 
 function getCalendarForUser(refreshToken: string): calendar_v3.Calendar {
   const oauth2Client = new google.auth.OAuth2(
@@ -264,11 +279,34 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const bodyJson = await req.json();
-    const body = ScheduleRequestSchema.safeParse(bodyJson);
-    if (!body.success) {
+    const ip = getRequestIp(req);
+    const rateLimit = checkRouteRateLimit("schedule", session.user.id, ip);
+    if (!rateLimit.allowed) {
       return NextResponse.json(
-        { status: "error", message: "Invalid request" },
+        {
+          status: "error",
+          message: `Rate limit exceeded (${rateLimit.scope}). Try again later.`,
+        },
+        {
+          status: 429,
+          headers: { "Retry-After": String(rateLimit.retryAfterSeconds) },
+        }
+      );
+    }
+
+    const raw = await readLimitedJsonBody(req);
+    if (!raw.ok) {
+      return NextResponse.json(
+        { status: "error", message: raw.message },
+        { status: raw.status }
+      );
+    }
+
+    const body = ScheduleRequestSchema.safeParse(raw.value);
+    if (!body.success) {
+      const first = body.error.issues[0]?.message ?? "Invalid request";
+      return NextResponse.json(
+        { status: "error", message: first },
         { status: 400 }
       );
     }
@@ -305,10 +343,31 @@ export async function POST(req: NextRequest) {
 
     timeDebug("schedule request body", {
       hasOverride: !!body.data.override,
-      text: body.data.text?.slice(0, 80),
+      textLength: body.data.text?.length ?? 0,
       override_start: body.data.override?.start,
       override_end: body.data.override?.end,
     });
+
+    // If the user text is extremely vague (e.g. "do something sometime") and
+    // does not contain any concrete time hints, fail fast instead of asking
+    // the model to invent an arbitrary time.
+    if (!body.data.override) {
+      const rawText = (body.data.text ?? "").toLowerCase();
+      const hasDigits = /\d/.test(rawText);
+      const hasTimeKeyword = /today|tonight|tomorrow|morning|afternoon|evening|weekend|next\s+\w+|this\s+\w+|\bmon(day)?\b|\btue(sday)?\b|\bwed(nesday)?\b|\bthu(rsday)?\b|\bfri(day)?\b|\bsat(urday)?\b|\bsun(day)?\b|\b\d{1,2}\s*(am|pm)\b/.test(
+        rawText
+      );
+      const hasVagueOnly = /\bsome ?time\b|\bsometime\b|\bsomeday\b/.test(
+        rawText
+      );
+
+      if (hasVagueOnly && !hasDigits && !hasTimeKeyword) {
+        return NextResponse.json(
+          { status: "error", message: "Could not understand task time." },
+          { status: 400 }
+        );
+      }
+    }
 
     // 1) Determine the task details (override skips LLM)
     // When no override, pass client's exact time from getBrowserTimezone (getUserTimeContext): timestamp, timezone, localTime
@@ -342,7 +401,7 @@ export async function POST(req: NextRequest) {
       start: parsed.start,
       end: parsed.end,
       timeZone,
-      userTimeContext,
+      hasUserTimeContext: !!userTimeContext,
     });
 
     if (!parsed.title || !parsed.start || !parsed.end) {
@@ -411,19 +470,22 @@ export async function POST(req: NextRequest) {
     const event = await createCalendarEvent(calendar, parsed, timeZone);
 
     if (!event?.id || !event?.htmlLink) {
-      console.error("Calendar API returned incomplete event:", { id: event?.id, htmlLink: event?.htmlLink });
+      devLog("Calendar API returned incomplete event:", {
+        id: event?.id,
+        htmlLink: event?.htmlLink,
+      });
+      console.error("Calendar API returned incomplete event");
       return NextResponse.json(
         { status: "error", message: "Calendar did not return the created event." },
         { status: 500 }
       );
     }
 
-    console.log("[schedule] Event created:", {
-      id: event.id,
-      htmlLink: event.htmlLink,
+    devLog("[schedule] Event created", {
+      eventId: event.id,
       start: parsed.start,
       end: parsed.end,
-      forUser: session.user.email ?? session.user.id,
+      userId: session.user.id,
     });
 
     return NextResponse.json({
@@ -436,7 +498,7 @@ export async function POST(req: NextRequest) {
       calendarEventLink: event.htmlLink,
     });
   } catch (error) {
-    console.error("Error scheduling task:", error);
+    logErrorSafe("Error scheduling task:", error);
     return NextResponse.json(
       {
         status: "error",

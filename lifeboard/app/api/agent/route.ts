@@ -5,6 +5,12 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { prisma } from "@/lib/prisma";
 import { agentGraph } from "@/lib/agent/graph";
 import { AgentResultSchema } from "@/lib/agent/schemas";
+import { logErrorSafe } from "@/lib/devLog";
+import { checkRouteRateLimit, getRequestIp } from "@/lib/rateLimit";
+import {
+  AI_ROUTE_LIMITS,
+  readLimitedJsonBody,
+} from "@/lib/requestPayloadLimits";
 
 type UserTimeContext = {
   timestamp: string;
@@ -12,41 +18,67 @@ type UserTimeContext = {
   localTime: string;
 };
 
-const AgentRequestSchema = {
-  parse(body: unknown): {
-    text: string;
-    timeZone?: string;
-    userTimeContext?: UserTimeContext;
-  } {
-    if (
-      body &&
-      typeof body === "object" &&
-      "text" in body &&
-      typeof (body as any).text === "string" &&
-      (body as any).text.trim().length > 0
-    ) {
-      const timeZone =
-        typeof (body as any).timeZone === "string" && (body as any).timeZone.trim()
-          ? (body as any).timeZone.trim()
-          : undefined;
-      const ctx = (body as any).userTimeContext;
-      const userTimeContext =
-        ctx &&
-        typeof ctx === "object" &&
-        typeof ctx.timestamp === "string" &&
-        typeof ctx.timezone === "string" &&
-        typeof ctx.localTime === "string"
-          ? {
-              timestamp: ctx.timestamp,
-              timezone: ctx.timezone,
-              localTime: ctx.localTime,
-            }
-          : undefined;
-      return { text: (body as any).text.trim(), timeZone, userTimeContext };
-    }
+const L = AI_ROUTE_LIMITS;
+
+function parseAgentRequestBody(body: unknown): {
+  text: string;
+  timeZone?: string;
+  userTimeContext?: UserTimeContext;
+} {
+  if (
+    !body ||
+    typeof body !== "object" ||
+    !("text" in body) ||
+    typeof (body as { text: unknown }).text !== "string" ||
+    !(body as { text: string }).text.trim()
+  ) {
     throw new Error("text is required");
-  },
-};
+  }
+
+  const text = (body as { text: string }).text.trim();
+  if (text.length > L.agentTextMaxChars) {
+    throw new Error(`text must be at most ${L.agentTextMaxChars} characters`);
+  }
+
+  const timeZoneRaw = (body as { timeZone?: unknown }).timeZone;
+  const timeZone =
+    typeof timeZoneRaw === "string" && timeZoneRaw.trim()
+      ? timeZoneRaw.trim()
+      : undefined;
+  if (timeZone && timeZone.length > L.timeZoneMaxChars) {
+    throw new Error("timeZone is too long");
+  }
+
+  const ctx = (body as { userTimeContext?: unknown }).userTimeContext;
+  let userTimeContext: UserTimeContext | undefined;
+  if (
+    ctx &&
+    typeof ctx === "object" &&
+    ctx !== null &&
+    "timestamp" in ctx &&
+    "timezone" in ctx &&
+    "localTime" in ctx &&
+    typeof (ctx as UserTimeContext).timestamp === "string" &&
+    typeof (ctx as UserTimeContext).timezone === "string" &&
+    typeof (ctx as UserTimeContext).localTime === "string"
+  ) {
+    const utc = (ctx as UserTimeContext).timestamp;
+    const tz = (ctx as UserTimeContext).timezone;
+    const local = (ctx as UserTimeContext).localTime;
+    if (utc.length > L.userTimeTimestampMaxChars) {
+      throw new Error("userTimeContext.timestamp is too long");
+    }
+    if (tz.length > L.timeZoneMaxChars) {
+      throw new Error("userTimeContext.timezone is too long");
+    }
+    if (local.length > L.userTimeLocalTimeMaxChars) {
+      throw new Error("userTimeContext.localTime is too long");
+    }
+    userTimeContext = { timestamp: utc, timezone: tz, localTime: local };
+  }
+
+  return { text, timeZone, userTimeContext };
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -58,18 +90,40 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const ip = getRequestIp(req);
+    const rateLimit = checkRouteRateLimit("agent", session.user.id, ip);
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        {
+          status: "error",
+          message: `Rate limit exceeded (${rateLimit.scope}). Try again later.`,
+        },
+        {
+          status: 429,
+          headers: { "Retry-After": String(rateLimit.retryAfterSeconds) },
+        }
+      );
+    }
+
+    const raw = await readLimitedJsonBody(req);
+    if (!raw.ok) {
+      return NextResponse.json(
+        { status: "error", message: raw.message },
+        { status: raw.status }
+      );
+    }
+
     let body: {
       text: string;
       timeZone?: string;
       userTimeContext?: UserTimeContext;
     };
     try {
-      body = AgentRequestSchema.parse(await req.json());
-    } catch {
-      return NextResponse.json(
-        { status: "error", message: "Invalid request: text is required" },
-        { status: 400 }
-      );
+      body = parseAgentRequestBody(raw.value);
+    } catch (e) {
+      const msg =
+        e instanceof Error && e.message ? e.message : "Invalid request";
+      return NextResponse.json({ status: "error", message: msg }, { status: 400 });
     }
 
     const userId = session.user.id;
@@ -123,7 +177,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(parsed.data);
   } catch (err) {
-    console.error("Error in /api/agent:", err);
+    logErrorSafe("Error in /api/agent:", err);
     return NextResponse.json(
       {
         status: "error",
