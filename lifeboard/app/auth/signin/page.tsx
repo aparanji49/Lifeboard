@@ -5,6 +5,8 @@ import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
+const LINKEDIN_URL = "https://www.linkedin.com/in/saiaparanjinemmani";
+
 const ERROR_MESSAGES: Record<string, string> = {
   OAuthCallback:
     "Something went wrong during sign-in. Please try again or use a different account.",
@@ -14,6 +16,12 @@ const ERROR_MESSAGES: Record<string, string> = {
     "We couldn't create your account. Please try again.",
   EmailCreateAccount:
     "We couldn't create your account. Please try again.",
+  OAuthAccessDenied:
+    "Sign-in is blocked. This app may be restricted to Google OAuth test users.",
+  access_denied:
+    "Sign-in is blocked. This app may be restricted to Google OAuth test users.",
+  AccessDenied:
+    "Sign-in is blocked. This app may be restricted to Google OAuth test users.",
   Callback:
     "Something went wrong during sign-in. Please try again.",
   Default:
@@ -26,6 +34,10 @@ function SignInContent() {
   const errorMessage = errorCode
     ? ERROR_MESSAGES[errorCode] ?? ERROR_MESSAGES.Default
     : null;
+  const isOAuthAccessDenied =
+    errorCode === "OAuthAccessDenied" ||
+    errorCode === "access_denied" ||
+    errorCode === "AccessDenied";
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-6 px-4">
@@ -44,6 +56,20 @@ function SignInContent() {
             role="alert"
           >
             {errorMessage}
+            {isOAuthAccessDenied && (
+              <p className="mt-2">
+                Message me on{" "}
+                <a
+                  href={LINKEDIN_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline"
+                >
+                  LinkedIn
+                </a>{" "}
+                with your Google email address and I’ll add it, then try again.
+              </p>
+            )}
           </div>
         )}
         <button
